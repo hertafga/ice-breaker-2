@@ -6,11 +6,17 @@
 <title>Puzzle Stik - 5 Kotak + Reset (HTML)</title>
 <style>
   body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#fff;margin:0}
-  .wrap{width:700px;margin:0 auto;padding:16px}
+  .wrap{width:700px;max-width:100vw;margin:0 auto;padding:16px}
   .topbar{display:flex;justify-content:flex-end;gap:10px;align-items:center}
   button{padding:.55rem .9rem;border:2px solid #333;border-radius:8px;background:#eee;font-weight:600;cursor:pointer}
   #reset{background:#f1f1f1}
-  canvas{display:block;margin:12px auto 24px;border:1px solid #e5e5e5;border-radius:10px}
+  canvas{
+    display:block;margin:12px auto 24px;border:1px solid #e5e5e5;border-radius:10px;
+    /* penting untuk mobile drag */
+    touch-action: none;        /* cegah scroll saat drag di atas canvas */
+    -webkit-user-select:none;  /* cegah select teks */
+    user-select:none;
+  }
   .hint{color:#666;font-size:.9rem}
 </style>
 </head>
@@ -20,136 +26,100 @@
     <button id="reset">🔄 Reset</button>
   </div>
   <canvas id="board" width="700" height="700"></canvas>
-  <div class="hint">Tip: klik sebuah stik untuk memilih (merah), lalu tarik untuk memindahkan.</div>
+  <div class="hint">Tip: ketuk sebuah stik untuk memilih (merah), lalu seret untuk memindahkan.</div>
 </div>
 
 <script>
-/* ====== Konfigurasi & util ====== */
-const WIDTH = 700, HEIGHT = 700;
-const BLACK = "#000000", RED = "#ff0000";
-const LINE_W = 5;
+const WIDTH=700, HEIGHT=700, BLACK="#000", RED="#f00", LINE_W=5;
 
-class Vec { constructor(x=0,y=0){this.x=x;this.y=y} copy(){return new Vec(this.x,this.y)} add(v){this.x+=v.x;this.y+=v.y;return this}}
-class Stick {
+class Vec{constructor(x=0,y=0){this.x=x;this.y=y} copy(){return new Vec(this.x,this.y)}}
+class Stick{
   constructor(x1,y1,x2,y2){
-    this.initialStart = new Vec(x1,y1);
-    this.initialEnd   = new Vec(x2,y2);
-    this.start = this.initialStart.copy();
-    this.end   = this.initialEnd.copy();
-    this.selected = false;
+    this.initialStart=new Vec(x1,y1); this.initialEnd=new Vec(x2,y2);
+    this.start=this.initialStart.copy(); this.end=this.initialEnd.copy();
+    this.selected=false;
   }
   draw(ctx){
-    ctx.strokeStyle = this.selected ? RED : BLACK;
-    ctx.lineWidth = LINE_W;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(this.start.x, this.start.y);
-    ctx.lineTo(this.end.x, this.end.y);
-    ctx.stroke();
+    ctx.strokeStyle=this.selected?RED:BLACK; ctx.lineWidth=LINE_W; ctx.lineCap="round";
+    ctx.beginPath(); ctx.moveTo(this.start.x,this.start.y); ctx.lineTo(this.end.x,this.end.y); ctx.stroke();
   }
-  // klik dekat titik tengah (sesuai kode pygame)
   isClicked(pos){
-    const midx = (this.start.x + this.end.x)/2;
-    const midy = (this.start.y + this.end.y)/2;
-    const dx = pos.x - midx, dy = pos.y - midy;
-    return Math.hypot(dx,dy) < 30;
+    const midx=(this.start.x+this.end.x)/2, midy=(this.start.y+this.end.y)/2;
+    return Math.hypot(pos.x-midx,pos.y-midy)<30; // toleransi klik/ketuk
   }
-  move(dx,dy){ this.start.x += dx; this.start.y += dy; this.end.x += dx; this.end.y += dy; }
-  reset(){ this.start = this.initialStart.copy(); this.end = this.initialEnd.copy(); }
+  move(dx,dy){ this.start.x+=dx; this.start.y+=dy; this.end.x+=dx; this.end.y+=dy; }
+  reset(){ this.start=this.initialStart.copy(); this.end=this.initialEnd.copy(); }
 }
 
 function addSegment(set,x1,y1,x2,y2){
-  // normalisasi supaya (A,B) dan (B,A) sama
-  const key = (x1< x2 || (x1===x2 && y1<=y2)) ? `${x1},${y1},${x2},${y2}` : `${x2},${y2},${x1},${y1}`;
+  const key=(x1<x2 || (x1===x2 && y1<=y2)) ? `${x1},${y1},${x2},${y2}` : `${x2},${y2},${x1},${y1}`;
   set.add(key);
 }
 function addSquare(set,x,y,size){
-  addSegment(set,x, y, x+size, y);                 // atas
-  addSegment(set,x+size, y, x+size, y+size);       // kanan
-  addSegment(set,x+size, y+size, x, y+size);       // bawah
-  addSegment(set,x, y+size, x, y);                 // kiri
+  addSegment(set,x,y,x+size,y); addSegment(set,x+size,y,x+size,y+size);
+  addSegment(set,x+size,y+size,x,y+size); addSegment(set,x,y+size,x,y);
 }
 function generateSticks(){
-  const size = 80;
-  const total_w = 3*size, total_h = 3*size;
-  const base_x = (WIDTH - total_w) / 2;  // tengah horizontal
-  const base_y = 120;                    // lebih ke atas (di bawah tombol reset)
-
-  const unique = new Set();
-
-  // 3 kotak bawah menempel
-  for(let i=0;i<3;i++) addSquare(unique, base_x + i*size, base_y + 2*size, size);
-
-  // 2 kotak menumpuk di kanan
-  const right_x = base_x + 2*size;
-  addSquare(unique, right_x, base_y + size, size);
-  addSquare(unique, right_x, base_y, size);
-
-  // konversi ke objek Stick
-  const sticks = [];
-  unique.forEach(k=>{
-    const [x1,y1,x2,y2] = k.split(',').map(Number);
-    sticks.push(new Stick(x1,y1,x2,y2));
-  });
-  // (opsional) console.log("Total sticks:", sticks.length); // harus 16
-  return sticks;
+  const size=80, total_w=3*size;
+  const base_x=(WIDTH-total_w)/2, base_y=120;     // tengah horizontal, di bawah tombol
+  const uniq=new Set();
+  for(let i=0;i<3;i++) addSquare(uniq, base_x+i*size, base_y+2*size, size); // 3 bawah menempel
+  const right_x=base_x+2*size;
+  addSquare(uniq,right_x,base_y+size,size);
+  addSquare(uniq,right_x,base_y,size);
+  const out=[]; uniq.forEach(k=>{const [x1,y1,x2,y2]=k.split(',').map(Number); out.push(new Stick(x1,y1,x2,y2));});
+  return out; // total 16 stik
 }
 
-/* ====== Inisialisasi ====== */
-const canvas = document.getElementById("board");
-const ctx = canvas.getContext("2d");
-const sticks = generateSticks();
+const canvas=document.getElementById("board");
+const ctx=canvas.getContext("2d");
+const sticks=generateSticks();
+let selected=null, offset={x:0,y:0};
 
-let selected = null;
-let offset = new Vec(0,0);
-
-function getMousePos(evt){
-  const r = canvas.getBoundingClientRect();
-  return new Vec(evt.clientX - r.left, evt.clientY - r.top);
+function getPos(e){
+  const r=canvas.getBoundingClientRect();
+  return {x:e.clientX-r.left, y:e.clientY-r.top};
 }
 
-/* ====== Event ====== */
-canvas.addEventListener("mousedown", (e)=>{
-  const pos = getMousePos(e);
-  // pilih stik paling atas (iterasi terbalik)
+/* ====== Pointer Events: bekerja untuk mouse & touch ====== */
+canvas.addEventListener("pointerdown",(e)=>{
+  const pos=getPos(e);
   for(let i=sticks.length-1;i>=0;i--){
-    const s = sticks[i];
+    const s=sticks[i];
     if(s.isClicked(pos)){
-      selected = s;
-      s.selected = true;
-      offset = new Vec(pos.x - s.start.x, pos.y - s.start.y);
+      selected=s; s.selected=true;
+      offset.x=pos.x - s.start.x; offset.y=pos.y - s.start.y;
+      canvas.setPointerCapture(e.pointerId);
+      e.preventDefault();
       break;
     }
   }
 });
-window.addEventListener("mouseup", ()=>{
-  if(selected){ selected.selected = false; selected = null; }
-});
-canvas.addEventListener("mousemove", (e)=>{
+canvas.addEventListener("pointermove",(e)=>{
   if(!selected) return;
-  const pos = getMousePos(e);
-  const newStartX = pos.x - offset.x, newStartY = pos.y - offset.y;
-  const dx = newStartX - selected.start.x;
-  const dy = newStartY - selected.start.y;
+  const pos=getPos(e);
+  const newX=pos.x - offset.x, newY=pos.y - offset.y;
+  const dx=newX - selected.start.x, dy=newY - selected.start.y;
   selected.move(dx,dy);
+  e.preventDefault();
 });
+function endDrag(e){
+  if(selected){ selected.selected=false; selected=null; }
+  try{ canvas.releasePointerCapture(e.pointerId); }catch(_){}
+}
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
+canvas.addEventListener("pointerleave", endDrag);
 
-document.getElementById("reset").addEventListener("click", ()=>{
-  sticks.forEach(s=>s.reset());
-});
+/* ====== Reset ====== */
+document.getElementById("reset").addEventListener("click", ()=> sticks.forEach(s=>s.reset()) );
 
 /* ====== Render loop ====== */
 function draw(){
   ctx.clearRect(0,0,WIDTH,HEIGHT);
-
-  // judul
-  ctx.fillStyle = "#000";
-  ctx.font = "20px system-ui,Segoe UI,Roboto,Arial";
-  ctx.fillText("Puzzle Stik - 5 Kotak (drag untuk memindahkan)", 20, 40);
-
-  // gambar semua stik
-  sticks.forEach(s=> s.draw(ctx));
-
+  ctx.fillStyle="#000"; ctx.font="20px system-ui,Segoe UI,Roboto,Arial";
+  ctx.fillText("Puzzle Stik - 5 Kotak (seret untuk memindahkan)", 20, 40);
+  sticks.forEach(s=>s.draw(ctx));
   requestAnimationFrame(draw);
 }
 draw();
